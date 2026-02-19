@@ -1,3 +1,5 @@
+using Microsoft.EntityFrameworkCore;
+
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -7,49 +9,66 @@ builder.Services.AddCors(options =>
         policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod());
 });
 
+builder.Services.AddDbContext<AppDbContext>(options =>
+    options.UseSqlServer("Server=localhost,1433;Database=ProductosDB;User Id=sa;Password=contraseña123!;TrustServerCertificate=True"));
+
 var app = builder.Build();
 app.UseCors();
 app.UseSwagger();
 app.UseSwaggerUI();
 
-var productos = new List<Producto>
+using (var scope = app.Services.CreateScope())
 {
-    new Producto(1, "Manzana", 500),
-    new Producto(2, "Pan", 1200)
-};
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    db.Database.EnsureCreated();
+}
 
-app.MapGet("/productos", () => productos);
+app.MapGet("/productos", async (AppDbContext db) =>
+    await db.Productos.ToListAsync());
 
-app.MapGet("/productos/{id}", (int id) =>
+app.MapGet("/productos/{id}", async (int id, AppDbContext db) =>
 {
-    var p = productos.FirstOrDefault(x => x.Id == id);
+    var p = await db.Productos.FindAsync(id);
     return p is null ? Results.NotFound() : Results.Ok(p);
 });
 
-app.MapPost("/productos", (Producto nuevo) =>
+app.MapPost("/productos", async (Producto nuevo, AppDbContext db) =>
 {
-    nuevo = nuevo with { Id = productos.Count + 1 };
-    productos.Add(nuevo);
+    db.Productos.Add(nuevo);
+    await db.SaveChangesAsync();
     return Results.Created($"/productos/{nuevo.Id}", nuevo);
 });
 
-app.MapPut("/productos/{id}", (int id, Producto actualizado) =>
+app.MapPut("/productos/{id}", async (int id, Producto actualizado, AppDbContext db) =>
 {
-    var index = productos.FindIndex(x => x.Id == id);
-    if (index == -1) return Results.NotFound();
-    productos[index] = actualizado with { Id = id };
-    return Results.Ok(productos[index]);
+    var p = await db.Productos.FindAsync(id);
+    if (p is null) return Results.NotFound();
+    p.Nombre = actualizado.Nombre;
+    p.Precio = actualizado.Precio;
+    await db.SaveChangesAsync();
+    return Results.Ok(p);
 });
 
-app.MapDelete("/productos/{id}", (int id) =>
+app.MapDelete("/productos/{id}", async (int id, AppDbContext db) =>
 {
-    var p = productos.FirstOrDefault(x => x.Id == id);
+    var p = await db.Productos.FindAsync(id);
     if (p is null) return Results.NotFound();
-    productos.Remove(p);
+    db.Productos.Remove(p);
+    await db.SaveChangesAsync();
     return Results.NoContent();
 });
 
 app.Run();
 
-// "record" es como una clase simple pero inmutable, ideal para modelos de datos
-record Producto(int Id, string Nombre, decimal Precio);
+class AppDbContext : DbContext
+{
+    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
+    public DbSet<Producto> Productos { get; set; }
+}
+
+class Producto
+{
+    public int Id { get; set; }
+    public string Nombre { get; set; } = "";
+    public decimal Precio { get; set; }
+}
